@@ -1,0 +1,585 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>GA Drone Dashboard</title>
+  <link rel="stylesheet" href="styles.css" />
+  <!-- SheetJS: parse Excel in the browser -->
+  <script src="https://cdn.sheetjs.com/xlsx-0.20.3/package/dist/xlsx.full.min.js"></script>
+  <!-- Supabase JS client -->
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
+</head>
+<body>
+
+<!-- ═══ HEADER ═══════════════════════════════════════════════════ -->
+<header>
+  <div class="header-inner">
+    <div class="logo">
+      <span class="logo-icon">🛩</span>
+      <span class="logo-text">General Aeronautics — Drone Dashboard</span>
+    </div>
+    <div class="header-pills" id="header-pills"></div>
+  </div>
+</header>
+
+<!-- ═══ TAB BAR ══════════════════════════════════════════════════ -->
+<div class="tab-bar">
+  <button class="tab-btn active" id="tab-btn-customers" onclick="switchTab('customers')">Customers</button>
+  <button class="tab-btn"        id="tab-btn-drones"    onclick="switchTab('drones')">Drones</button>
+</div>
+
+<!-- ═══ TOOLBAR ══════════════════════════════════════════════════ -->
+<div class="toolbar">
+  <div class="search-wrap">
+    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2">
+      <circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/>
+    </svg>
+    <input type="text" id="search-input" placeholder="Search…" oninput="handleSearch(this.value)" />
+  </div>
+  <span class="count-label" id="count-label"></span>
+</div>
+
+<!-- ═══ CUSTOMER TAB ══════════════════════════════════════════════ -->
+<div class="tab-content active" id="tab-customers">
+  <div class="card-grid" id="customer-grid"></div>
+</div>
+
+<!-- ═══ DRONE TAB ════════════════════════════════════════════════ -->
+<div class="tab-content" id="tab-drones">
+  <div class="card-grid" id="drone-grid"></div>
+</div>
+
+<!-- ═══ MODAL ════════════════════════════════════════════════════ -->
+<div class="modal-overlay hidden" id="modal-overlay" onclick="handleOverlayClick(event)">
+  <div class="modal" id="modal">
+    <button class="modal-close" onclick="closeModal()">✕</button>
+    <div class="modal-body" id="modal-body"></div>
+  </div>
+</div>
+
+<!-- ═══ LOADING ══════════════════════════════════════════════════ -->
+<div class="loading-overlay" id="loading">
+  <div class="spinner"></div>
+  <p>Loading dashboard data…</p>
+</div>
+
+<!-- ═══ SUPABASE CONFIG + APP LOGIC ══════════════════════════════ -->
+<script src="supabase-config.js"></script>
+<script>
+'use strict';
+
+// ─── STATE ────────────────────────────────────────────────────
+let db = null;
+let allDrones = [];
+let allCustomers = [];
+let filtered = [];
+let currentTab = 'customers';
+
+// ─── INIT ─────────────────────────────────────────────────────
+document.addEventListener('DOMContentLoaded', init);
+
+async function init() {
+  try {
+    if (typeof SUPABASE_URL !== 'undefined' && SUPABASE_URL !== 'YOUR_SUPABASE_URL') {
+      db = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+    }
+    const wb = await loadExcel();
+    allDrones    = parseDrones(wb);
+    allCustomers = computeCustomers(allDrones);
+    filtered     = allCustomers;
+    updateHeaderPills();
+    renderDroneCards(allDrones);      // render first so count gets overwritten
+    renderCustomerCards(allCustomers); // active tab renders last → correct count label
+    document.getElementById('loading').style.display = 'none';
+  } catch (err) {
+    document.getElementById('loading').innerHTML =
+      `<div class="error-banner"><strong>Could not load data.</strong><br>${escHtml(err.message)}<br><br>
+       If opening locally, serve via a web server (e.g. VS Code Live Server) rather than file://</div>`;
+  }
+}
+
+// ─── EXCEL ────────────────────────────────────────────────────
+async function loadExcel() {
+  const res = await fetch('./data/drone_data.xlsx');
+  if (!res.ok) throw new Error(`Excel file not found (HTTP ${res.status}). Make sure data/drone_data.xlsx exists.`);
+  const buf = await res.arrayBuffer();
+  return XLSX.read(buf, { type: 'array', raw: false, cellDates: false });
+}
+
+function parseDrones(wb) {
+  const sheet = wb.Sheets['Drone details'];
+  if (!sheet) throw new Error('Sheet "Drone details" not found in Excel file.');
+  const rows = XLSX.utils.sheet_to_json(sheet, { defval: '' });
+  return rows
+    .map(r => ({
+      droneCode:         str(r['drone_code']),
+      droneType:         str(r['drone_type_name']),
+      customerName:      str(r['customer_name']),
+      adminName:         str(r['admin_name']),
+      adminNumber:       str(r['admin_number']),
+      flightTimeMinutes: num(r['total_flight_time_minutes']),
+      acresCovered:      num(r['total_area_covered_acres']),
+      liveSince:         str(r['customer_id_created_date']),
+      totalTickets:      int(r['total_ticket_count']),
+      crashes:           int(r['crashed_ticket_count']),
+      firstTicketDate:   str(r['first_ticket_date']),
+      lastTicketDate:    str(r['last_ticket_date']),
+      timeToFirstTicket: num(r['Time to first ticket']),
+      grounded:          str(r['Grounded?']).toUpperCase() === 'Y',
+    }))
+    .filter(d => d.droneCode);
+}
+
+function computeCustomers(drones) {
+  const map = new Map();
+  for (const d of drones) {
+    if (!d.customerName) continue;
+    if (!map.has(d.customerName)) map.set(d.customerName, []);
+    map.get(d.customerName).push(d);
+  }
+  return Array.from(map.entries())
+    .map(([name, ds]) => {
+      const dates      = ds.map(d => d.liveSince).filter(Boolean);
+      const lastDates  = ds.map(d => d.lastTicketDate).filter(Boolean);
+      const ttfts      = ds.map(d => d.timeToFirstTicket).filter(v => v > 0);
+      return {
+        name,
+        fleetCount:        ds.length,
+        flightTimeMinutes: ds.reduce((s, d) => s + d.flightTimeMinutes, 0),
+        acresCovered:      ds.reduce((s, d) => s + d.acresCovered, 0),
+        customerSince:     dates.length  ? dates.sort(dateSort)[0]               : '',
+        totalTickets:      ds.reduce((s, d) => s + d.totalTickets, 0),
+        crashes:           ds.reduce((s, d) => s + d.crashes, 0),
+        lastTicketDate:    lastDates.length ? lastDates.sort(dateSort).slice(-1)[0] : '',
+        timeToFirstTicket: ttfts.length ? Math.min(...ttfts) : null,
+        groundedCount:     ds.filter(d => d.grounded).length,
+      };
+    })
+    .sort((a, b) => b.fleetCount - a.fleetCount);
+}
+
+// ─── HEADER PILLS ─────────────────────────────────────────────
+function updateHeaderPills() {
+  const totalDrones    = allDrones.length;
+  const totalCustomers = allCustomers.length;
+  const grounded       = allDrones.filter(d => d.grounded).length;
+  document.getElementById('header-pills').innerHTML = [
+    pill('Drones',     totalDrones),
+    pill('Customers',  totalCustomers),
+    pill('Grounded',   grounded),
+    pill('Active',     totalDrones - grounded),
+  ].join('');
+}
+const pill = (label, val) =>
+  `<span class="pill"><strong>${val}</strong> ${label}</span>`;
+
+// ─── TAB SWITCH ───────────────────────────────────────────────
+function switchTab(tab) {
+  currentTab = tab;
+  document.getElementById('tab-customers').classList.toggle('active', tab === 'customers');
+  document.getElementById('tab-drones').classList.toggle('active',    tab === 'drones');
+  document.getElementById('tab-btn-customers').classList.toggle('active', tab === 'customers');
+  document.getElementById('tab-btn-drones').classList.toggle('active',    tab === 'drones');
+  document.getElementById('search-input').value = '';
+  handleSearch('');
+}
+
+// ─── SEARCH ───────────────────────────────────────────────────
+function handleSearch(q) {
+  const ql = q.toLowerCase();
+  if (currentTab === 'customers') {
+    const list = allCustomers.filter(c => c.name.toLowerCase().includes(ql));
+    renderCustomerCards(list);
+  } else {
+    const list = allDrones.filter(d =>
+      d.droneCode.toLowerCase().includes(ql) ||
+      d.customerName.toLowerCase().includes(ql)
+    );
+    renderDroneCards(list);
+  }
+}
+
+// ─── RENDER: CUSTOMER CARDS ────────────────────────────────────
+function renderCustomerCards(list) {
+  const grid = document.getElementById('customer-grid');
+  document.getElementById('count-label').textContent =
+    `${list.length} customer${list.length !== 1 ? 's' : ''}`;
+  if (!list.length) { grid.innerHTML = '<p class="no-results">No customers match your search.</p>'; return; }
+  grid.innerHTML = list.map(c => `
+    <div class="card" onclick="openCustomerModal('${escAttr(c.name)}')">
+      <div class="card-header">
+        <span class="card-title">${escHtml(c.name)}</span>
+      </div>
+      <div class="card-stats">
+        <div class="stat">
+          <span class="stat-label">Fleet</span>
+          <span class="stat-value">${c.fleetCount}</span>
+        </div>
+        <div class="stat">
+          <span class="stat-label">Flight Hours</span>
+          <span class="stat-value">${fmtHours(c.flightTimeMinutes)}</span>
+        </div>
+        <div class="stat">
+          <span class="stat-label">Acres Sprayed</span>
+          <span class="stat-value">${fmtAcres(c.acresCovered)}</span>
+        </div>
+        <div class="stat">
+          <span class="stat-label">Since</span>
+          <span class="stat-value">${fmtDate(c.customerSince)}</span>
+        </div>
+      </div>
+    </div>`).join('');
+}
+
+// ─── RENDER: DRONE CARDS ──────────────────────────────────────
+function renderDroneCards(list) {
+  const grid = document.getElementById('drone-grid');
+  document.getElementById('count-label').textContent =
+    `${list.length} drone${list.length !== 1 ? 's' : ''}`;
+  if (!list.length) { grid.innerHTML = '<p class="no-results">No drones match your search.</p>'; return; }
+  grid.innerHTML = list.map(d => `
+    <div class="card" onclick="openDroneModal('${escAttr(d.droneCode)}')">
+      <div class="card-header">
+        <span class="card-title">${escHtml(d.droneCode)}</span>
+        <span class="status-dot ${d.grounded ? 'red' : 'green'}"
+              title="${d.grounded ? 'Grounded' : 'Active'}"></span>
+      </div>
+      <div class="card-subtitle">${escHtml(d.customerName)}</div>
+      <div class="card-stats">
+        <div class="stat">
+          <span class="stat-label">Flight Hours</span>
+          <span class="stat-value">${fmtHours(d.flightTimeMinutes)}</span>
+        </div>
+        <div class="stat">
+          <span class="stat-label">Acres</span>
+          <span class="stat-value">${fmtAcres(d.acresCovered)}</span>
+        </div>
+        <div class="stat">
+          <span class="stat-label">Live Since</span>
+          <span class="stat-value">${fmtDate(d.liveSince)}</span>
+        </div>
+        <div class="stat">
+          <span class="stat-label">Tickets</span>
+          <span class="stat-value">${d.totalTickets}</span>
+        </div>
+      </div>
+    </div>`).join('');
+}
+
+// ─── MODAL: CUSTOMER ──────────────────────────────────────────
+async function openCustomerModal(name) {
+  const c = allCustomers.find(x => x.name === name);
+  if (!c) return;
+  showModal();
+  document.getElementById('modal-body').innerHTML = customerModalHtml(c);
+  await loadComments(name);
+}
+
+function customerModalHtml(c) {
+  return `
+    <div class="modal-title-row">
+      <span class="modal-title">${escHtml(c.name)}</span>
+    </div>
+    <div class="modal-subtitle">Customer overview</div>
+
+    <div class="modal-stats">
+      ${mstat('Fleet Size',            c.fleetCount)}
+      ${mstat('Grounded Drones',       c.groundedCount, c.groundedCount > 0 ? '#ef4444' : undefined)}
+      ${mstat('Total Flight Hours',    fmtHours(c.flightTimeMinutes))}
+      ${mstat('Acres Sprayed',         fmtAcres(c.acresCovered))}
+      ${mstat('Customer Since',        fmtDate(c.customerSince))}
+      ${mstat('Total Tickets Raised',  c.totalTickets)}
+      ${mstat('Crashes',               c.crashes)}
+      ${mstat('Last Ticket Date',      fmtDate(c.lastTicketDate))}
+      ${mstat('Time to First Ticket',  c.timeToFirstTicket != null ? c.timeToFirstTicket + ' days' : 'N/A')}
+    </div>
+
+    <div class="modal-divider"></div>
+    <p class="section-heading">Comments</p>
+    ${commentsSection(c.name)}
+  `;
+}
+
+// ─── MODAL: DRONE ────────────────────────────────────────────
+async function openDroneModal(code) {
+  const d = allDrones.find(x => x.droneCode === code);
+  if (!d) return;
+  showModal();
+  let manual = {};
+  if (db) {
+    const { data } = await db.from('drone_manual').select('*').eq('drone_code', code).maybeSingle();
+    if (data) manual = data;
+  }
+  document.getElementById('modal-body').innerHTML = droneModalHtml(d, manual);
+}
+
+function droneModalHtml(d, manual) {
+  const statusCls = d.grounded ? 'grounded-badge-red' : 'active-badge';
+  const statusTxt = d.grounded ? '● Grounded' : '● Active';
+  return `
+    <div class="modal-title-row">
+      <span class="modal-title">${escHtml(d.droneCode)}</span>
+      <span class="grounded-badge ${statusCls}">${statusTxt}</span>
+    </div>
+    <div class="modal-subtitle">${escHtml(d.customerName)}${d.droneType ? ' · ' + escHtml(d.droneType) : ''}</div>
+
+    <div class="modal-stats">
+      ${mstat('Flight Hours',          fmtHours(d.flightTimeMinutes))}
+      ${mstat('Acres Sprayed',         fmtAcres(d.acresCovered))}
+      ${mstat('Live Since',            fmtDate(d.liveSince))}
+      ${mstat('Total Tickets',         d.totalTickets)}
+      ${mstat('Crashes',               d.crashes)}
+      ${mstat('Last Ticket Date',      fmtDate(d.lastTicketDate))}
+      ${mstat('Time to First Ticket',  d.timeToFirstTicket > 0 ? d.timeToFirstTicket + ' days' : 'N/A')}
+      ${mstat('Pilot / Admin',         d.adminName || 'N/A')}
+    </div>
+
+    <div class="modal-divider"></div>
+    <div class="manual-section">
+      <p class="section-heading">Commissioning &amp; Insurance</p>
+      <div id="manual-view">${manualViewHtml(manual)}</div>
+      <div id="manual-edit" style="display:none">${manualEditHtml(manual)}</div>
+      ${db ? `
+        <div class="manual-actions" id="manual-action-btns">
+          <button class="btn btn-ghost" onclick="toggleManualEdit(true)">Edit</button>
+        </div>` : noSupabaseBanner()}
+    </div>
+  `;
+}
+
+function manualViewHtml(m) {
+  return `<div class="manual-grid">
+    ${mfield('Commissioning Date', m.commissioning_date)}
+    ${mfield('Insurance',          m.insurance)}
+    ${mfield('Insurance Provider', m.insurance_provider)}
+    ${mfield('Insurance Validity', m.insurance_validity)}
+    ${mfield('CAMC',               m.camc)}
+  </div>`;
+}
+
+function manualEditHtml(m) {
+  return `<div class="manual-grid">
+    <div class="manual-field">
+      <label class="manual-label">Commissioning Date</label>
+      <input class="manual-input" type="date" id="f_commissioning"
+        value="${escAttr(m.commissioning_date || '')}">
+    </div>
+    <div class="manual-field">
+      <label class="manual-label">Insurance</label>
+      <select class="manual-input" id="f_insurance">
+        <option value="">— select —</option>
+        <option value="Yes" ${m.insurance === 'Yes' ? 'selected' : ''}>Yes</option>
+        <option value="No"  ${m.insurance === 'No'  ? 'selected' : ''}>No</option>
+      </select>
+    </div>
+    <div class="manual-field">
+      <label class="manual-label">Insurance Provider</label>
+      <input class="manual-input" type="text" id="f_provider"
+        value="${escAttr(m.insurance_provider || '')}" placeholder="e.g. HDFC Ergo">
+    </div>
+    <div class="manual-field">
+      <label class="manual-label">Insurance Validity</label>
+      <input class="manual-input" type="date" id="f_validity"
+        value="${escAttr(m.insurance_validity || '')}">
+    </div>
+    <div class="manual-field" style="grid-column:1/-1">
+      <label class="manual-label">CAMC</label>
+      <input class="manual-input" type="text" id="f_camc"
+        value="${escAttr(m.camc || '')}" placeholder="CAMC details">
+    </div>
+  </div>`;
+}
+
+function mfield(label, val) {
+  const empty = !val;
+  return `<div class="manual-field">
+    <span class="manual-label">${label}</span>
+    <span class="manual-value${empty ? ' empty' : ''}">${escHtml(val || 'Not set')}</span>
+  </div>`;
+}
+
+function toggleManualEdit(editing) {
+  document.getElementById('manual-view').style.display = editing ? 'none' : 'block';
+  document.getElementById('manual-edit').style.display = editing ? 'block' : 'none';
+  document.getElementById('manual-action-btns').innerHTML = editing
+    ? `<button class="btn btn-ghost"    onclick="toggleManualEdit(false)">Cancel</button>
+       <button class="btn btn-primary"  id="save-btn" onclick="saveManualFields()">Save</button>`
+    : `<button class="btn btn-ghost"    onclick="toggleManualEdit(true)">Edit</button>`;
+}
+
+async function saveManualFields() {
+  const btn = document.getElementById('save-btn');
+  if (!db) return;
+  // find the currently open drone code from the modal title
+  const code = document.querySelector('.modal-title').textContent.trim();
+  const payload = {
+    drone_code:          code,
+    commissioning_date:  document.getElementById('f_commissioning').value || null,
+    insurance:           document.getElementById('f_insurance').value     || null,
+    insurance_provider:  document.getElementById('f_provider').value      || null,
+    insurance_validity:  document.getElementById('f_validity').value      || null,
+    camc:                document.getElementById('f_camc').value           || null,
+  };
+  btn.disabled = true;
+  btn.textContent = 'Saving…';
+  const { error } = await db.from('drone_manual').upsert(payload, { onConflict: 'drone_code' });
+  if (error) { alert('Save failed: ' + error.message); btn.disabled = false; btn.textContent = 'Save'; return; }
+  // refresh view
+  document.getElementById('manual-view').innerHTML = manualViewHtml(payload);
+  toggleManualEdit(false);
+}
+
+// ─── COMMENTS ─────────────────────────────────────────────────
+function commentsSection(customerName) {
+  if (!db) return noSupabaseBanner();
+  return `
+    <div class="comments-list" id="comments-list">
+      <p class="no-comments">Loading comments…</p>
+    </div>
+    <div class="comment-form">
+      <div class="comment-form-row">
+        <input class="comment-input" type="text" id="c_author"
+          placeholder="Your name"
+          value="${escAttr(localStorage.getItem('ga_author') || '')}" />
+        <input class="comment-input" type="text" id="c_customer"
+          value="${escAttr(customerName)}" style="display:none" />
+      </div>
+      <textarea class="comment-input" id="c_text" placeholder="Add a comment…" rows="3"></textarea>
+      <div style="display:flex;justify-content:flex-end">
+        <button class="btn btn-primary" onclick="postComment()">Post</button>
+      </div>
+    </div>`;
+}
+
+async function loadComments(customerName) {
+  if (!db) return;
+  const list = document.getElementById('comments-list');
+  if (!list) return;
+  const { data, error } = await db
+    .from('customer_comments')
+    .select('*')
+    .eq('customer_name', customerName)
+    .order('created_at', { ascending: false });
+  if (error) { list.innerHTML = `<p class="no-comments">Could not load comments.</p>`; return; }
+  if (!data || !data.length) { list.innerHTML = `<p class="no-comments">No comments yet.</p>`; return; }
+  list.innerHTML = data.map(c => `
+    <div class="comment-item">
+      <div class="comment-meta">
+        <strong>${escHtml(c.author || 'Anonymous')}</strong> ·
+        ${fmtDateTime(c.created_at)}
+      </div>
+      <div class="comment-text">${escHtml(c.comment)}</div>
+    </div>`).join('');
+}
+
+async function postComment() {
+  if (!db) return;
+  const author   = document.getElementById('c_author').value.trim();
+  const customer = document.getElementById('c_customer').value;
+  const text     = document.getElementById('c_text').value.trim();
+  if (!text) { alert('Please enter a comment.'); return; }
+  localStorage.setItem('ga_author', author);
+  const { error } = await db.from('customer_comments').insert({
+    customer_name: customer,
+    author: author || 'Anonymous',
+    comment: text,
+  });
+  if (error) { alert('Failed to post comment: ' + error.message); return; }
+  document.getElementById('c_text').value = '';
+  await loadComments(customer);
+}
+
+// ─── MODAL HELPERS ─────────────────────────────────────────────
+function showModal() {
+  document.getElementById('modal-overlay').classList.remove('hidden');
+  document.body.style.overflow = 'hidden';
+}
+function closeModal() {
+  document.getElementById('modal-overlay').classList.add('hidden');
+  document.body.style.overflow = '';
+}
+function handleOverlayClick(e) {
+  if (e.target === document.getElementById('modal-overlay')) closeModal();
+}
+document.addEventListener('keydown', e => { if (e.key === 'Escape') closeModal(); });
+
+function mstat(label, val, color) {
+  const style = color ? ` style="color:${color}"` : '';
+  return `<div class="modal-stat">
+    <span class="modal-stat-label">${label}</span>
+    <span class="modal-stat-value"${style}>${val ?? 'N/A'}</span>
+  </div>`;
+}
+
+function noSupabaseBanner() {
+  return `<div class="supabase-notice" style="margin-top:.75rem">
+    Supabase is not configured — open <strong>supabase-config.js</strong> and add your project URL &amp; anon key to enable this feature.
+  </div>`;
+}
+
+// ─── FORMATTERS ───────────────────────────────────────────────
+function fmtHours(mins) {
+  if (!mins || mins <= 0) return '0h';
+  const h = Math.floor(mins / 60);
+  const m = Math.round(mins % 60);
+  if (h === 0) return `${m}m`;
+  if (m === 0) return `${h}h`;
+  return `${h}h ${m}m`;
+}
+
+function fmtAcres(n) {
+  if (!n || n <= 0) return '0';
+  return n.toLocaleString('en-IN', { maximumFractionDigits: 1 });
+}
+
+function fmtDate(raw) {
+  const d = parseDate(raw);
+  if (!d) return 'N/A';
+  return d.toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' });
+}
+
+function fmtDateTime(raw) {
+  if (!raw) return '';
+  const d = new Date(raw);
+  if (isNaN(d)) return raw;
+  return d.toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' }) +
+         ', ' + d.toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', hour12: true });
+}
+
+function parseDate(val) {
+  if (!val || val === 'null' || val === 'NULL') return null;
+  const s = String(val).trim();
+  // "2022:06:07" or "2022:06:07 00:00:00"
+  const m = s.match(/^(\d{4}):(\d{2}):(\d{2})/);
+  if (m) return new Date(+m[1], +m[2] - 1, +m[3]);
+  const d = new Date(s);
+  return isNaN(d.getTime()) ? null : d;
+}
+
+function dateSort(a, b) {
+  const da = parseDate(a), db = parseDate(b);
+  if (!da && !db) return 0;
+  if (!da) return 1;
+  if (!db) return -1;
+  return da - db;
+}
+
+// ─── UTILS ────────────────────────────────────────────────────
+function str(v) { return v == null ? '' : String(v).trim(); }
+function num(v) { const n = parseFloat(v); return isNaN(n) ? 0 : n; }
+function int(v) { const n = parseInt(v);   return isNaN(n) ? 0 : n; }
+
+function escHtml(s) {
+  return String(s ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+}
+function escAttr(s) {
+  return String(s ?? '').replace(/'/g, '&#39;').replace(/"/g, '&quot;');
+}
+</script>
+</body>
+</html>
