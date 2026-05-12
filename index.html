@@ -101,7 +101,7 @@ async function init() {
 
 // ─── EXCEL ────────────────────────────────────────────────────
 async function loadExcel() {
-  const res = await fetch('./data/drone_data.xlsx');
+  const res = await fetch('./drone_data.xlsx');
   if (!res.ok) throw new Error(`Excel file not found (HTTP ${res.status}). Make sure data/drone_data.xlsx exists.`);
   const buf = await res.arrayBuffer();
   return XLSX.read(buf, { type: 'array', raw: false, cellDates: false });
