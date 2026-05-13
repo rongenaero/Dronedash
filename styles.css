@@ -202,6 +202,14 @@ header {
   color: var(--text-light);
   margin-bottom: .65rem;
 }
+.card-last-flight {
+  font-size: .72rem;
+  color: var(--text-light);
+  white-space: nowrap;
+  margin-left: .75rem;
+  padding-top: .1rem;
+  flex-shrink: 0;
+}
 
 .card-stats {
   display: grid;
