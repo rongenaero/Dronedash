@@ -35,9 +35,55 @@
     <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2">
       <circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/>
     </svg>
-    <input type="text" id="search-input" placeholder="Search…" oninput="handleSearch(this.value)" />
+    <input type="text" id="search-input" placeholder="Search…" oninput="applyFilters()" />
   </div>
   <span class="count-label" id="count-label"></span>
+</div>
+
+<!-- ═══ FILTER BAR ════════════════════════════════════════════════ -->
+<div class="filter-bar" id="filter-bar">
+  <!-- Last Flight Date -->
+  <div class="filter-group">
+    <label class="filter-label">Last Flight</label>
+    <div class="filter-flight-row">
+      <select id="f-flight-mode" onchange="onFlightModeChange()">
+        <option value="">Any date</option>
+        <option value="between">Between</option>
+        <option value="before">Before</option>
+        <option value="after">After</option>
+      </select>
+      <span id="f-flight-inputs" class="flight-inputs hidden">
+        <input type="date" id="f-flight-a" oninput="applyFilters()" />
+        <span id="f-flight-and" class="flight-and">and</span>
+        <input type="date" id="f-flight-b" oninput="applyFilters()" />
+      </span>
+    </div>
+  </div>
+
+  <!-- Grounded -->
+  <div class="filter-group">
+    <label class="filter-label">Grounded</label>
+    <div class="toggle-group" id="f-grounded">
+      <button class="toggle-btn active" data-val="" onclick="setToggle('f-grounded','')">All</button>
+      <button class="toggle-btn"        data-val="Y" onclick="setToggle('f-grounded','Y')">Yes</button>
+      <button class="toggle-btn"        data-val="N" onclick="setToggle('f-grounded','N')">No</button>
+    </div>
+  </div>
+
+  <!-- At least 1 crash -->
+  <div class="filter-group">
+    <label class="filter-label">Has Crash</label>
+    <div class="toggle-group" id="f-crash">
+      <button class="toggle-btn active" data-val="" onclick="setToggle('f-crash','')">All</button>
+      <button class="toggle-btn"        data-val="Y" onclick="setToggle('f-crash','Y')">Yes</button>
+      <button class="toggle-btn"        data-val="N" onclick="setToggle('f-crash','N')">No</button>
+    </div>
+  </div>
+
+  <!-- Clear -->
+  <button class="filter-clear hidden" id="filter-clear-btn" onclick="clearAllFilters()">
+    Clear filters <span id="filter-badge"></span>
+  </button>
 </div>
 
 <!-- ═══ CUSTOMER TAB ══════════════════════════════════════════════ -->
@@ -185,20 +231,107 @@ function switchTab(tab) {
   document.getElementById('tab-btn-customers').classList.toggle('active', tab === 'customers');
   document.getElementById('tab-btn-drones').classList.toggle('active',    tab === 'drones');
   document.getElementById('search-input').value = '';
-  handleSearch('');
+  applyFilters();
 }
 
 // ─── SEARCH ───────────────────────────────────────────────────
-function handleSearch(q) {
-  const ql = q.toLowerCase();
+function handleSearch() { applyFilters(); }
+
+// ─── FILTERS ──────────────────────────────────────────────────
+function onFlightModeChange() {
+  const mode = document.getElementById('f-flight-mode').value;
+  const wrap = document.getElementById('f-flight-inputs');
+  const andEl = document.getElementById('f-flight-and');
+  const inputB = document.getElementById('f-flight-b');
+  wrap.classList.toggle('hidden', !mode);
+  andEl.style.display  = mode === 'between' ? '' : 'none';
+  inputB.style.display = mode === 'between' ? '' : 'none';
+  document.getElementById('f-flight-a').value = '';
+  document.getElementById('f-flight-b').value = '';
+  applyFilters();
+}
+
+function setToggle(groupId, val) {
+  const group = document.getElementById(groupId);
+  group.querySelectorAll('.toggle-btn').forEach(btn => {
+    btn.classList.toggle('active', btn.dataset.val === val);
+  });
+  applyFilters();
+}
+
+function getToggleVal(groupId) {
+  const active = document.querySelector(`#${groupId} .toggle-btn.active`);
+  return active ? active.dataset.val : '';
+}
+
+function getFlightFilter() {
+  const mode = document.getElementById('f-flight-mode').value;
+  if (!mode) return null;
+  const a = document.getElementById('f-flight-a').value;
+  const b = document.getElementById('f-flight-b').value;
+  return { mode, a: a ? new Date(a) : null, b: b ? new Date(b) : null };
+}
+
+function passesFlightFilter(lastFlightRaw, filter) {
+  if (!filter) return true;
+  const d = parseDate(lastFlightRaw);
+  if (!d) return false;
+  const { mode, a, b } = filter;
+  if (mode === 'between') return (!a || d >= a) && (!b || d <= b);
+  if (mode === 'before')  return a ? d <= a : true;
+  if (mode === 'after')   return a ? d >= a : true;
+  return true;
+}
+
+function updateFilterUI(activeCount) {
+  const btn = document.getElementById('filter-clear-btn');
+  const badge = document.getElementById('filter-badge');
+  btn.classList.toggle('hidden', activeCount === 0);
+  badge.textContent = activeCount > 0 ? activeCount : '';
+}
+
+function clearAllFilters() {
+  document.getElementById('f-flight-mode').value = '';
+  onFlightModeChange();
+  setToggle('f-grounded', '');
+  setToggle('f-crash', '');
+}
+
+function applyFilters() {
+  const q        = document.getElementById('search-input').value.toLowerCase();
+  const flight   = getFlightFilter();
+  const grounded = getToggleVal('f-grounded');
+  const crash    = getToggleVal('f-crash');
+
+  // count active filters
+  let active = 0;
+  if (flight && (flight.a || flight.b || flight.mode === 'between')) active++;
+  if (grounded) active++;
+  if (crash)    active++;
+  updateFilterUI(active);
+
   if (currentTab === 'customers') {
-    const list = allCustomers.filter(c => c.name.toLowerCase().includes(ql));
+    const list = allCustomers.filter(c => {
+      if (q && !c.name.toLowerCase().includes(q) &&
+          !allDrones.some(d => d.customerName === c.name && d.droneCode.toLowerCase().includes(q))) return false;
+      if (!passesFlightFilter(c.lastFlight, flight)) return false;
+      if (grounded === 'Y' && c.groundedCount === 0) return false;
+      if (grounded === 'N' && c.groundedCount > 0)  return false;
+      if (crash === 'Y' && c.crashes === 0)  return false;
+      if (crash === 'N' && c.crashes > 0)   return false;
+      return true;
+    });
     renderCustomerCards(list);
   } else {
-    const list = allDrones.filter(d =>
-      d.droneCode.toLowerCase().includes(ql) ||
-      d.customerName.toLowerCase().includes(ql)
-    );
+    const list = allDrones.filter(d => {
+      if (q && !d.droneCode.toLowerCase().includes(q) && !d.customerName.toLowerCase().includes(q)) return false;
+      if (!passesFlightFilter(d.lastFlight, flight)) return false;
+      if (grounded === 'Y' && !d.grounded) return false;
+      if (grounded === 'N' &&  d.grounded) return false;
+      if (crash === 'Y' && d.crashes === 0) return false;
+      if (crash === 'N' && d.crashes > 0)  return false;
+      return true;
+    });
     renderDroneCards(list);
   }
 }
