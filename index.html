@@ -168,10 +168,11 @@ function parseDrones(wb) {
       acresCovered:      num(r['total_area_covered_acres']),
       liveSince:         str(r['customer_id_created_date']),
       totalTickets:      int(r['total_ticket_count']),
+      openTickets:       int(r['all_open_tickets']),
       crashes:           int(r['crashed_ticket_count']),
       firstTicketDate:   str(r['first_ticket_date']),
       lastTicketDate:    str(r['last_ticket_date']),
-      timeToFirstTicket: num(r['Time to first ticket']),
+      timeToFirstTicket: num(r['time_to_first_ticket'] || r['Time to first ticket']),
       grounded:          str(r['is_grounded'] || r['Grounded?']).toUpperCase() === 'Y',
       lastFlight:        str(r['last_flight']),
     }))
@@ -198,6 +199,7 @@ function computeCustomers(drones) {
         acresCovered:      ds.reduce((s, d) => s + d.acresCovered, 0),
         customerSince:     dates.length       ? dates.sort(dateSort)[0]                : '',
         totalTickets:      ds.reduce((s, d) => s + d.totalTickets, 0),
+        openTickets:       ds.reduce((s, d) => s + d.openTickets, 0),
         crashes:           ds.reduce((s, d) => s + d.crashes, 0),
         lastTicketDate:    lastDates.length   ? lastDates.sort(dateSort).slice(-1)[0]  : '',
         lastFlight:        flightDates.length ? flightDates.sort(dateSort).slice(-1)[0]: '',
@@ -365,6 +367,10 @@ function renderCustomerCards(list) {
           <span class="stat-label">Since</span>
           <span class="stat-value">${fmtDate(c.customerSince)}</span>
         </div>
+        <div class="stat">
+          <span class="stat-label">Open Tickets</span>
+          <span class="stat-value">${c.openTickets}</span>
+        </div>
       </div>
     </div>`).join('');
 }
@@ -400,6 +406,10 @@ function renderDroneCards(list) {
           <span class="stat-label">Tickets</span>
           <span class="stat-value">${d.totalTickets}</span>
         </div>
+        <div class="stat">
+          <span class="stat-label">Open Tickets</span>
+          <span class="stat-value">${d.openTickets}</span>
+        </div>
       </div>
     </div>`).join('');
 }
@@ -427,6 +437,7 @@ function customerModalHtml(c) {
       ${mstat('Acres Sprayed',         fmtAcres(c.acresCovered))}
       ${mstat('Customer Since',        fmtDate(c.customerSince))}
       ${mstat('Total Tickets Raised',  c.totalTickets)}
+      ${mstat('Open Tickets',          c.openTickets)}
       ${mstat('Crashes',               c.crashes)}
       ${mstat('Last Ticket Date',      fmtDate(c.lastTicketDate))}
       ${mstat('Last Flight Date',      fmtDate(c.lastFlight))}
@@ -466,7 +477,8 @@ function droneModalHtml(d, manual) {
       ${mstat('Flight Hours',          fmtHours(d.flightTimeMinutes))}
       ${mstat('Acres Sprayed',         fmtAcres(d.acresCovered))}
       ${mstat('Live Since',            fmtDate(d.liveSince))}
-      ${mstat('Total Tickets',         d.totalTickets)}
+      ${mstat('Total Tickets',          d.totalTickets)}
+      ${mstat('Open Tickets',           d.openTickets)}
       ${mstat('Crashes',               d.crashes)}
       ${mstat('Last Ticket Date',      fmtDate(d.lastTicketDate))}
       ${mstat('Last Flight Date',      fmtDate(d.lastFlight))}
